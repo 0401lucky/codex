@@ -1,0 +1,214 @@
+@import "tailwindcss";
+
+@theme {
+  /* 暖色调主题 - Soft Glass */
+  --color-primary-50: #fff7ed;
+  --color-primary-100: #ffedd5;
+  --color-primary-200: #fed7aa;
+  --color-primary-300: #fdba74;
+  --color-primary-400: #fb923c;
+  --color-primary-500: #f97316;
+  --color-primary-600: #ea580c;
+  --color-primary-700: #c2410c;
+  --color-primary-800: #9a3412;
+  --color-primary-900: #7c2d12;
+
+  /* 中性色 - Stone/Warm Gray */
+  --color-neutral-50: #fafaf9;
+  --color-neutral-100: #f5f5f4;
+  --color-neutral-200: #e7e5e4;
+  --color-neutral-300: #d6d3d1;
+  --color-neutral-400: #a8a29e;
+  --color-neutral-500: #78716c;
+  --color-neutral-600: #57534e;
+  --color-neutral-700: #44403c;
+  --color-neutral-800: #292524;
+  --color-neutral-900: #1c1917;
+
+  /* 语义化颜色 */
+  --color-background: #fafaf9;
+  --color-foreground: #292524;
+
+  /* 阴影系统 */
+  --shadow-soft: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+  --shadow-glass: 0 8px 32px 0 rgba(41, 37, 36, 0.05);
+  --shadow-glass-hover: 0 12px 40px 0 rgba(249, 115, 22, 0.1);
+
+  --font-family-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+body {
+  color: var(--color-foreground);
+  background: #fdfcf8;
+  font-family: var(--font-family-sans);
+  overflow-x: hidden;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(255, 237, 213, 0.5) 0%, transparent 50%),
+    radial-gradient(circle at 0% 0%, rgba(255, 237, 213, 0.4) 0px, transparent 40%),
+    radial-gradient(circle at 100% 0%, rgba(254, 215, 170, 0.4) 0px, transparent 40%),
+    radial-gradient(circle at 100% 100%, rgba(255, 247, 237, 0.3) 0px, transparent 40%),
+    radial-gradient(circle at 0% 100%, rgba(255, 237, 213, 0.3) 0px, transparent 40%);
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-white/85 backdrop-blur-md border border-white/60 shadow-sm;
+  }
+
+  .glass-card {
+    @apply bg-white/80 backdrop-blur-sm border border-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-all duration-300;
+  }
+
+  .glass-card:hover {
+    @apply bg-white/95 shadow-[0_20px_40px_rgb(0,0,0,0.08)] -translate-y-1 border-white;
+  }
+
+  .gradient-warm {
+    background: linear-gradient(135deg, #ff8c42 0%, #f97316 50%, #ea580c 100%);
+  }
+
+  .gradient-gold {
+    background: linear-gradient(135deg, #fcd34d 0%, #fbbf24 50%, #d97706 100%);
+  }
+
+  .shadow-glow {
+    box-shadow: 0 0 20px rgba(249, 115, 22, 0.3);
+  }
+
+  .shadow-glow-gold {
+    box-shadow: 0 0 15px rgba(251, 191, 36, 0.4);
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-br from-stone-800 to-stone-600;
+  }
+
+  .text-gradient-primary {
+    @apply bg-clip-text text-transparent bg-gradient-to-br from-orange-500 via-orange-600 to-red-600;
+  }
+
+  .text-gradient-gold {
+    @apply bg-clip-text text-transparent bg-gradient-to-br from-amber-400 via-orange-400 to-amber-600;
+  }
+
+  .animate-spin {
+    animation: spin 1s linear infinite;
+  }
+
+  .animate-spin-slow {
+    animation: spin 8s linear infinite;
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  .animate-pulse-glow {
+    animation: pulseGlow 2s ease-in-out infinite;
+    will-change: opacity;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .animate-scale-in {
+    animation: scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  .shine-effect {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .shine-effect::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 50%;
+    height: 100%;
+    background: linear-gradient(to right, transparent, rgba(255,255,255,0.4), transparent);
+    transform: translateX(-150%) skewX(-25deg);
+    will-change: transform;
+    animation: shine 3s infinite;
+  }
+
+  .perspective-500 {
+    perspective: 500px;
+  }
+
+  .perspective-1000 {
+    perspective: 1000px;
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+
+@keyframes shine {
+  0% { transform: translateX(-150%) skewX(-25deg); }
+  20% { transform: translateX(250%) skewX(-25deg); }
+  100% { transform: translateX(250%) skewX(-25deg); }
+}
+
+@keyframes pointerWobble {
+  0%, 100% { transform: translateX(-50%) rotate(-3deg); }
+  50% { transform: translateX(-50%) rotate(3deg); }
+}
+
+.animate-pointer-wobble {
+  animation: pointerWobble 2s ease-in-out infinite;
+}
+
+@media (max-width: 768px) {
+  .glass,
+  .glass-card {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    background-color: rgba(255, 255, 255, 0.95) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin,
+  .animate-spin-slow,
+  .animate-float,
+  .animate-pulse,
+  .animate-pulse-glow,
+  .shine-effect::after,
+  .animate-pointer-wobble {
+    animation: none !important;
+  }
+}
