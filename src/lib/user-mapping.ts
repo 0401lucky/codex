@@ -29,8 +29,8 @@ export async function getNewApiUserId(linuxdoId: number): Promise<number | null>
     }
   }
 
-  // 2. NewAPI 中 LinuxDo 登录用户的用户名格式: linuxdo{linuxdoId}
-  const newApiUsername = `linuxdo${linuxdoId}`;
+  // 2. NewAPI 中 LinuxDo 登录用户的用户名格式: linuxdo_{linuxdoId}
+  const newApiUsername = `linuxdo_${linuxdoId}`;
   const user = await searchUserByUsername(newApiUsername);
   if (!user) {
     return null;
