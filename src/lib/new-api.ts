@@ -101,6 +101,49 @@ function normalizeUserList(data: unknown): NewApiUser[] {
   return list.filter((item): item is NewApiUser => !!item && typeof item === "object");
 }
 
+function readAnyField(source: unknown, keys: string[]): unknown {
+  if (!source || typeof source !== "object") return undefined;
+  const record = source as Record<string, unknown>;
+  for (const key of keys) {
+    if (key in record) return record[key];
+  }
+  return undefined;
+}
+
+function readUserLinuxDoId(user: NewApiUser): string {
+  return normalizeLinuxDoId(readAnyField(user, ["linuxdo_id", "linuxdoId", "LinuxDoId"]));
+}
+
+function readUserUsername(user: NewApiUser): string {
+  return normalizeUsername(readAnyField(user, ["username", "user_name", "name"]));
+}
+
+function readUserDisplayName(user: NewApiUser): string {
+  return normalizeUsername(readAnyField(user, ["display_name", "displayName", "name"]));
+}
+
+function findMatchByLinuxDoProfile(
+  users: NewApiUser[],
+  targetLinuxDoId: string,
+  linuxdoUsername?: string
+): NewApiUser | null {
+  const byLinuxDoId = users.find((user) => readUserLinuxDoId(user) === targetLinuxDoId);
+  if (byLinuxDoId) return byLinuxDoId;
+
+  const targetUsername = normalizeUsername(linuxdoUsername);
+  if (!targetUsername) return null;
+
+  const byName = users.filter((user) => {
+    const username = readUserUsername(user);
+    const displayName = readUserDisplayName(user);
+    return username === targetUsername || displayName === targetUsername;
+  });
+  if (byName.length === 1) return byName[0];
+
+  const prefixed = byName.find((user) => readUserUsername(user).startsWith("linuxdo_"));
+  return prefixed ?? null;
+}
+
 export async function loginToNewApi(
   username: string,
   password: string
@@ -272,12 +315,19 @@ export async function searchUserByUsername(username: string): Promise<NewApiUser
       }
 
       if (!response.ok || !data?.success || !data.data) {
+        if (!response.ok || !data?.success) {
+          console.warn("Search user by username failed", {
+            status: response.status,
+            success: data?.success,
+            message: data?.message,
+          });
+        }
         return null;
       }
 
       const users = normalizeUserList(data.data);
       const exactMatch = users.find(
-        (user) => normalizeUsername(user.username) === targetUsername
+        (user) => readUserUsername(user) === targetUsername
       );
       return exactMatch || null;
     } catch (error) {
@@ -299,17 +349,18 @@ function normalizeLinuxDoId(value: unknown): string {
   return "";
 }
 
-function findMatchByLinuxDoId(users: NewApiUser[], targetLinuxDoId: string): NewApiUser | null {
-  const matched = users.find(
-    (user) => normalizeLinuxDoId(user.linuxdo_id) === targetLinuxDoId
-  );
-  return matched ?? null;
-}
-
-export async function findUserByLinuxDoId(linuxdoId: number): Promise<NewApiUser | null> {
+export async function findUserByLinuxDoId(
+  linuxdoId: number,
+  linuxdoUsername?: string
+): Promise<NewApiUser | null> {
   const baseUrl = getNewApiUrl();
   const targetLinuxDoId = String(linuxdoId);
-  const keywordCandidates = [targetLinuxDoId, `linuxdo_${targetLinuxDoId}`, `linuxdo${targetLinuxDoId}`];
+  const keywordCandidates = [
+    targetLinuxDoId,
+    `linuxdo_${targetLinuxDoId}`,
+    `linuxdo${targetLinuxDoId}`,
+    linuxdoUsername ?? "",
+  ].filter((value) => value.length > 0);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const loginResult = await getAdminSessionWithUser(attempt > 0);
@@ -336,8 +387,15 @@ export async function findUserByLinuxDoId(linuxdoId: number): Promise<NewApiUser
 
         if (searchResponse.ok && searchData?.success && searchData.data) {
           const users = normalizeUserList(searchData.data);
-          const matched = findMatchByLinuxDoId(users, targetLinuxDoId);
+          const matched = findMatchByLinuxDoProfile(users, targetLinuxDoId, linuxdoUsername);
           if (matched) return matched;
+        } else if (!searchResponse.ok || !searchData?.success) {
+          console.warn("Find user by linuxdoId search step failed", {
+            status: searchResponse.status,
+            success: searchData?.success,
+            message: searchData?.message,
+            keyword,
+          });
         }
       } catch (error) {
         console.error("Find user by linuxdoId via search error:", error);
@@ -360,11 +418,17 @@ export async function findUserByLinuxDoId(linuxdoId: number): Promise<NewApiUser
         }
 
         if (!response.ok || !data?.success || !Array.isArray(data.data)) {
+          console.warn("Find user by linuxdoId scan step failed", {
+            status: response.status,
+            success: data?.success,
+            message: data?.message,
+            page,
+          });
           return null;
         }
 
         const users = data.data;
-        const matched = findMatchByLinuxDoId(users, targetLinuxDoId);
+        const matched = findMatchByLinuxDoProfile(users, targetLinuxDoId, linuxdoUsername);
         if (matched) return matched;
 
         if (users.length === 0) break;

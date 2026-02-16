@@ -19,7 +19,7 @@ interface UserMapping {
  * 3. 若未命中，则按 linuxdo_id 精确匹配
  * 4. 缓存结果到 Redis
  */
-export async function getNewApiUserId(linuxdoId: number): Promise<number | null> {
+export async function getNewApiUserId(linuxdoId: number, linuxdoUsername?: string): Promise<number | null> {
   const cacheKey = `${MAPPING_PREFIX}${linuxdoId}`;
 
   // 1. 查缓存
@@ -45,7 +45,7 @@ export async function getNewApiUserId(linuxdoId: number): Promise<number | null>
   // 3. 若用户名规则未命中，按 linuxdo_id 精确匹配（可靠）
   if (!user) {
     console.warn('[user-mapping] username candidates miss, fallback to linuxdo_id scan', { linuxdoId });
-    user = await findUserByLinuxDoId(linuxdoId);
+    user = await findUserByLinuxDoId(linuxdoId, linuxdoUsername);
   }
 
   if (!user) {
