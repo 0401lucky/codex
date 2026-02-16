@@ -1,41 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Gift, Loader2, Sparkles, History,
   User as UserIcon, LogOut, Trophy, AlertCircle, Crown, Star, Zap, ChevronRight
 } from 'lucide-react';
 
-const PRIZES = [
-  { id: 'tier_1', name: '1刀福利', value: 1, color: '#22c55e', visualAngle: 90 },
-  { id: 'tier_3', name: '3刀福利', value: 3, color: '#3b82f6', visualAngle: 75 },
-  { id: 'tier_5', name: '5刀福利', value: 5, color: '#f59e0b', visualAngle: 70 },
-  { id: 'tier_10', name: '10刀福利', value: 10, color: '#ec4899', visualAngle: 55 },
-  { id: 'tier_15', name: '15刀福利', value: 15, color: '#8b5cf6', visualAngle: 40 },
-  { id: 'tier_20', name: '20刀福利', value: 20, color: '#ef4444', visualAngle: 30 },
-];
-
-const PRIZE_STYLES: Record<string, { colors: string[], text: string, icon: string }> = {
-  'tier_1': { colors: ['#4ade80', '#22c55e'], text: 'text-green-700', icon: '🌱' },
-  'tier_3': { colors: ['#60a5fa', '#3b82f6'], text: 'text-blue-700', icon: '💧' },
-  'tier_5': { colors: ['#fbbf24', '#f59e0b'], text: 'text-amber-700', icon: '🔥' },
-  'tier_10': { colors: ['#f472b6', '#ec4899'], text: 'text-pink-700', icon: '🌸' },
-  'tier_15': { colors: ['#a78bfa', '#8b5cf6'], text: 'text-violet-700', icon: '🔮' },
-  'tier_20': { colors: ['#f87171', '#ef4444'], text: 'text-red-700', icon: '💎' },
-};
-
-const calculateAngles = () => {
-  let currentAngle = 0;
-  return PRIZES.map(prize => {
-    const startAngle = currentAngle;
-    const endAngle = currentAngle + prize.visualAngle;
-    currentAngle = endAngle;
-    return { ...prize, startAngle, endAngle };
-  });
-};
-
-const PRIZES_WITH_ANGLES = calculateAngles();
+const TIER_ICONS = ['🌱', '💧', '🔥', '🌸', '🔮', '💎', '🎁', '🎉', '✨'];
 
 const RANKING_POLL_INTERVAL_MS = 15000;
 const RANKING_MAX_BACKOFF_MS = 120000;
@@ -50,10 +22,24 @@ interface UserData {
 
 interface LotteryRecord {
   id: string;
+  tierId?: string;
   tierName: string;
   tierValue: number;
   directCredit?: boolean;
   createdAt: number;
+}
+
+interface LotteryTier {
+  id: string;
+  name: string;
+  value: number;
+  probability: number;
+  color: string;
+}
+
+interface WheelTier extends LotteryTier {
+  startAngle: number;
+  endAngle: number;
 }
 
 interface RankingUser {
@@ -80,6 +66,57 @@ export default function LotteryPage() {
 
   const [ranking, setRanking] = useState<RankingUser[]>([]);
   const [rankingLoading, setRankingLoading] = useState(true);
+  const [tiers, setTiers] = useState<LotteryTier[]>([]);
+
+  const wheelTiers = useMemo<WheelTier[]>(() => {
+    if (tiers.length === 0) return [];
+    const totalWeight = tiers.reduce((sum, tier) => sum + Math.max(0, Number(tier.probability) || 0), 0);
+    const safeTotalWeight = totalWeight > 0 ? totalWeight : tiers.length;
+    let currentAngle = 0;
+
+    return tiers.map((tier, index) => {
+      const weight = totalWeight > 0 ? Math.max(0, Number(tier.probability) || 0) : 1;
+      const slice = index === tiers.length - 1 ? 360 - currentAngle : (weight / safeTotalWeight) * 360;
+      const startAngle = currentAngle;
+      const endAngle = startAngle + slice;
+      currentAngle = endAngle;
+      return { ...tier, startAngle, endAngle };
+    });
+  }, [tiers]);
+
+  const tierVisualMap = useMemo(() => {
+    const map = new Map<string, { icon: string; textClass: string; color: string }>();
+    wheelTiers.forEach((tier, index) => {
+      const textClass = tier.value >= 15
+        ? 'text-red-700'
+        : tier.value >= 10
+          ? 'text-pink-700'
+          : tier.value >= 5
+            ? 'text-amber-700'
+            : tier.value >= 3
+              ? 'text-blue-700'
+              : 'text-green-700';
+      map.set(tier.id, {
+        icon: TIER_ICONS[index % TIER_ICONS.length],
+        textClass,
+        color: tier.color,
+      });
+    });
+    return map;
+  }, [wheelTiers]);
+
+  const getTierVisual = useCallback((tierId?: string, tierValue?: number) => {
+    if (tierId && tierVisualMap.has(tierId)) {
+      return tierVisualMap.get(tierId)!;
+    }
+    if (tierValue !== undefined) {
+      const tierByValue = wheelTiers.find((tier) => tier.value === tierValue);
+      if (tierByValue && tierVisualMap.has(tierByValue.id)) {
+        return tierVisualMap.get(tierByValue.id)!;
+      }
+    }
+    return { icon: '🎁', textClass: 'text-stone-700', color: '#a8a29e' };
+  }, [tierVisualMap, wheelTiers]);
 
   const spinTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const confettiFrameRef = useRef<number | null>(null);
@@ -139,6 +176,7 @@ export default function LotteryPage() {
         if (data.success) {
           setCanSpin(data.canSpin);
           setHasSpunToday(data.hasSpunToday || false);
+          setTiers(Array.isArray(data.tiers) ? data.tiers : []);
         }
       }
     } catch (err) {
@@ -199,7 +237,7 @@ export default function LotteryPage() {
   }, [clearRankingPollTimer, fetchData, fetchRanking]);
 
   const handleSpin = async () => {
-    if (!canSpin || spinning) return;
+    if (!canSpin || wheelTiers.length === 0 || spinning) return;
     setSpinning(true);
     setError(null);
 
@@ -208,7 +246,8 @@ export default function LotteryPage() {
       const data = await res.json();
 
       if (data.success) {
-        const prize = PRIZES_WITH_ANGLES.find(p => p.value === Number(data.record.tierValue));
+        const prize = wheelTiers.find((tier) => tier.id === data.record.tierId)
+          || wheelTiers.find((tier) => tier.value === Number(data.record.tierValue));
         if (prize) {
           const normalize = (deg: number) => ((deg % 360) + 360) % 360;
           const centerAngle = (prize.startAngle + prize.endAngle) / 2;
@@ -233,6 +272,7 @@ export default function LotteryPage() {
                 if (lotteryData.success) {
                   setCanSpin(lotteryData.canSpin);
                   setHasSpunToday(lotteryData.hasSpunToday || false);
+                  setTiers(Array.isArray(lotteryData.tiers) ? lotteryData.tiers : []);
                 }
               }
               const recordsRes = await fetch('/api/lottery/records');
@@ -284,14 +324,19 @@ export default function LotteryPage() {
   };
 
   const getConicGradient = () => {
+    if (wheelTiers.length === 0) {
+      return 'conic-gradient(#e7e5e4 0deg 360deg)';
+    }
     let stops = '';
-    PRIZES_WITH_ANGLES.forEach((prize, index) => {
-      const style = PRIZE_STYLES[prize.id] || { colors: [prize.color, prize.color] };
-      const color = style.colors[0];
-      stops += `${color} ${prize.startAngle}deg ${prize.endAngle}deg${index < PRIZES_WITH_ANGLES.length - 1 ? ', ' : ''}`;
+    wheelTiers.forEach((tier, index) => {
+      stops += `${tier.color} ${tier.startAngle}deg ${tier.endAngle}deg${index < wheelTiers.length - 1 ? ', ' : ''}`;
     });
     return `conic-gradient(${stops})`;
   };
+
+  const canSpinNow = canSpin && wheelTiers.length > 0;
+  const spinButtonText = spinning ? 'WISHING...' : canSpinNow ? 'GO LUCKY' : (canSpin ? '配置中' : '明日再来');
+  const spinHintText = canSpinNow ? '点击按钮开始抽奖' : (canSpin ? '奖池配置中，请稍后刷新' : '今日机会已用完，明天再来');
 
   if (loading) {
     return (
@@ -455,14 +500,14 @@ export default function LotteryPage() {
                   }}
                 >
                   <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_50%_50%,transparent_30%,rgba(0,0,0,0.1)_100%)]"></div>
-                  {PRIZES_WITH_ANGLES.map((prize) => (
-                    <div key={prize.id} className="absolute w-full h-full top-0 left-0"
-                      style={{ transform: `rotate(${prize.startAngle + (prize.endAngle - prize.startAngle) / 2}deg)` }}>
+                  {wheelTiers.map((tier) => (
+                    <div key={tier.id} className="absolute w-full h-full top-0 left-0"
+                      style={{ transform: `rotate(${tier.startAngle + (tier.endAngle - tier.startAngle) / 2}deg)` }}>
                       <div className="absolute top-0 left-1/2 -translate-x-1/2 h-1/2 w-0.5 bg-white/40 origin-bottom"
-                        style={{ transform: `rotate(${-((prize.endAngle - prize.startAngle) / 2)}deg)` }}></div>
+                        style={{ transform: `rotate(${-((tier.endAngle - tier.startAngle) / 2)}deg)` }}></div>
                       <div className="absolute top-8 left-1/2 -translate-x-1/2 text-center">
-                        <div className="text-2xl mb-1 filter drop-shadow-md">{PRIZE_STYLES[prize.id]?.icon || '🎁'}</div>
-                        <div className="text-white font-black text-sm sm:text-base drop-shadow-md whitespace-nowrap tracking-wide">${prize.value}</div>
+                        <div className="text-2xl mb-1 filter drop-shadow-md">{getTierVisual(tier.id, tier.value).icon}</div>
+                        <div className="text-white font-black text-sm sm:text-base drop-shadow-md whitespace-nowrap tracking-wide">${tier.value}</div>
                       </div>
                     </div>
                   ))}
@@ -505,29 +550,29 @@ export default function LotteryPage() {
 
               <button
                 onClick={handleSpin}
-                disabled={!canSpin || spinning}
+                disabled={!canSpinNow || spinning}
                 className={`group relative w-full py-5 rounded-2xl text-xl font-black text-white shadow-[0_10px_30px_rgba(249,115,22,0.4)] transition-all transform overflow-hidden
-                  ${canSpin && !spinning
+                  ${canSpinNow && !spinning
                     ? 'gradient-warm hover:shadow-[0_15px_40px_rgba(249,115,22,0.6)] hover:-translate-y-1 active:scale-95 active:shadow-inner'
                     : 'bg-stone-300 cursor-not-allowed shadow-none grayscale'}`}
               >
-                {canSpin && !spinning && <div className="absolute inset-0 bg-white/20 translate-y-full skew-y-12 group-hover:translate-y-[-200%] transition-transform duration-700 ease-in-out"></div>}
+                {canSpinNow && !spinning && <div className="absolute inset-0 bg-white/20 translate-y-full skew-y-12 group-hover:translate-y-[-200%] transition-transform duration-700 ease-in-out"></div>}
                 {spinning ? (
                   <span className="flex items-center justify-center gap-3">
                     <Loader2 className="w-6 h-6 animate-spin" />
-                    <span className="tracking-widest">WISHING...</span>
+                    <span className="tracking-widest">{spinButtonText}</span>
                   </span>
-                ) : canSpin ? (
+                ) : canSpinNow ? (
                   <span className="flex items-center justify-center gap-2 tracking-widest">
                     <Sparkles className="w-5 h-5 fill-white animate-pulse" />
-                    GO LUCKY
+                    {spinButtonText}
                     <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </span>
-                ) : '明日再来'}
+                ) : spinButtonText}
               </button>
 
               <p className="text-xs text-stone-400 font-medium tracking-wide uppercase">
-                {canSpin ? '点击按钮开始抽奖' : '今日机会已用完，明天再来'}
+                {spinHintText}
               </p>
             </div>
           </div>
@@ -557,8 +602,8 @@ export default function LotteryPage() {
                       <div className="absolute right-0 top-0 w-16 h-16 bg-gradient-to-bl from-orange-50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity rounded-tr-xl"></div>
                       <div className="flex items-center justify-between mb-2 relative z-10">
                         <div className="flex items-center gap-2">
-                          <span className="text-lg">{PRIZE_STYLES[`tier_${record.tierValue}`]?.icon || '🎁'}</span>
-                          <span className={`font-bold text-sm ${PRIZE_STYLES[`tier_${record.tierValue}`]?.text || 'text-stone-700'}`}>
+                          <span className="text-lg">{getTierVisual(record.tierId, record.tierValue).icon}</span>
+                          <span className={`font-bold text-sm ${getTierVisual(record.tierId, record.tierValue).textClass}`}>
                             {record.tierName}
                           </span>
                           {record.directCredit && (

@@ -15,21 +15,13 @@ export async function GET() {
       getLotteryRecords(20),
     ]);
 
-    // 统计今日参与用户数
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStart = today.getTime();
-
-    const todayRecords = recentRecords.filter(r => r.createdAt >= todayStart);
-    const todayUsers = new Set(todayRecords.map(r => r.oderId)).size;
-
     return NextResponse.json({
       success: true,
       stats: {
         todayDirectTotal: stats.todayDirectTotal,
         dailyDirectLimit: config.dailyDirectLimit,
-        todayUsers,
-        todaySpins: todayRecords.length,
+        todayUsers: stats.todayUsers,
+        todaySpins: stats.todaySpins,
         totalRecords: stats.totalRecords,
         enabled: config.enabled,
       },

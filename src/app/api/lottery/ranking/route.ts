@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getLotteryRecords } from "@/lib/lottery";
+import { getTodayLotteryRecords } from "@/lib/lottery";
 
 interface RankingUser {
   rank: number;
@@ -15,23 +15,12 @@ export async function GET(request: NextRequest) {
   const limit = Math.min(Math.max(Number(limitParam) || 10, 1), 50);
 
   try {
-    // 获取今天的所有记录
-    const records = await getLotteryRecords(500);
+    const records = await getTodayLotteryRecords({ includePending: false });
 
-    // 按用户聚合
     const userMap = new Map<string, { username: string; totalValue: number; bestPrize: string; bestValue: number; count: number }>();
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStart = today.getTime();
-
     for (const record of records) {
-      // 只统计今天的
-      if (record.createdAt < todayStart) continue;
-      // 跳过待确认记录
-      if (record.tierName.startsWith("[待确认]")) continue;
-
-      const userId = record.oderId;
+      const userId = record.linuxdoId;
       const existing = userMap.get(userId);
 
       if (existing) {
@@ -52,7 +41,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 排序并取 top N
     const ranking: RankingUser[] = Array.from(userMap.entries())
       .sort((a, b) => b[1].totalValue - a[1].totalValue)
       .slice(0, limit)

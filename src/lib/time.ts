@@ -6,6 +6,13 @@ export function getChinaTime(date: Date = new Date()): Date {
   return new Date(date.getTime() + CHINA_TZ_OFFSET_MS);
 }
 
+export function getChinaDayStartTimestamp(date: Date = new Date()): number {
+  const chinaTime = getChinaTime(date);
+  const chinaDayStart = new Date(chinaTime);
+  chinaDayStart.setUTCHours(0, 0, 0, 0);
+  return chinaDayStart.getTime() - CHINA_TZ_OFFSET_MS;
+}
+
 export function getTodayDateString(): string {
   const chinaTime = getChinaTime();
   const year = chinaTime.getUTCFullYear();
@@ -16,10 +23,7 @@ export function getTodayDateString(): string {
 
 export function getSecondsUntilMidnight(): number {
   const now = new Date();
-  const chinaTime = getChinaTime(now);
-  const tomorrow = new Date(chinaTime);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  tomorrow.setUTCHours(0, 0, 0, 0);
-  const tomorrowUTC = new Date(tomorrow.getTime() - CHINA_TZ_OFFSET_MS);
-  return Math.max(1, Math.ceil((tomorrowUTC.getTime() - now.getTime()) / 1000));
+  const todayStart = getChinaDayStartTimestamp(now);
+  const tomorrowStart = todayStart + 24 * 60 * 60 * 1000;
+  return Math.max(1, Math.ceil((tomorrowStart - now.getTime()) / 1000));
 }

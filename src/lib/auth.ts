@@ -23,7 +23,6 @@ const ADMIN_USERNAMES = getAdminUsernames();
 const SESSION_BLACKLIST_KEY = (jti: string) => `auth:session:blacklist:${jti}`;
 const SESSION_REVOKED_AFTER_KEY = (linuxdoId: number) => `auth:session:revoked-after:${linuxdoId}`;
 const SESSION_BLACKLIST_GRACE_SECONDS = 60;
-const SESSION_REVOKED_AFTER_TTL_SECONDS = 180 * 24 * 60 * 60;
 
 let developmentFallbackSecret: string | null = null;
 

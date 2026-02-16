@@ -1,7 +1,6 @@
 import { kv } from "./redis";
-import { getTodayDateString, getSecondsUntilMidnight } from "./time";
+import { getChinaDayStartTimestamp, getTodayDateString, getSecondsUntilMidnight } from "./time";
 
-// 抽奖档位
 export interface LotteryTier {
   id: string;
   name: string;
@@ -10,11 +9,11 @@ export interface LotteryTier {
   color: string;
 }
 
-// 抽奖记录
 export interface LotteryRecord {
   id: string;
-  oderId: string;        // linuxdoId
-  username: string;       // LinuxDo username
+  linuxdoId: string;
+  username: string;
+  tierId: string;
   tierName: string;
   tierValue: number;
   directCredit: boolean;
@@ -22,7 +21,10 @@ export interface LotteryRecord {
   createdAt: number;
 }
 
-// 抽奖配置
+interface StoredLotteryRecord extends Partial<LotteryRecord> {
+  oderId?: string;
+}
+
 export interface LotteryConfig {
   enabled: boolean;
   dailyDirectLimit: number;
@@ -44,13 +46,14 @@ const DEFAULT_CONFIG: LotteryConfig = {
   tiers: DEFAULT_TIERS,
 };
 
-// KV Keys
 const LOTTERY_CONFIG_KEY = "lottery:config";
 const LOTTERY_RECORDS_KEY = "lottery:records";
 const LOTTERY_USER_RECORDS_PREFIX = "lottery:user:records:";
 const LOTTERY_DAILY_PREFIX = "lottery:daily:";
 const LOTTERY_DAILY_DIRECT_KEY = "lottery:daily_direct:";
 const DIRECT_AMOUNT_SCALE = 100;
+const TODAY_RECORDS_SCAN_BATCH = 200;
+const TODAY_RECORDS_MAX_SCAN = 20000;
 
 function cloneDefaultLotteryConfig(): LotteryConfig {
   return { ...DEFAULT_CONFIG, tiers: DEFAULT_TIERS.map((tier) => ({ ...tier })) };
@@ -74,19 +77,73 @@ function sanitizeLotteryConfig(config: Partial<LotteryConfig>): LotteryConfig {
 
   return {
     enabled: typeof config.enabled === "boolean" ? config.enabled : fallback.enabled,
-    dailyDirectLimit: typeof config.dailyDirectLimit === "number" && Number.isFinite(config.dailyDirectLimit) ? config.dailyDirectLimit : fallback.dailyDirectLimit,
+    dailyDirectLimit: typeof config.dailyDirectLimit === "number" && Number.isFinite(config.dailyDirectLimit)
+      ? config.dailyDirectLimit
+      : fallback.dailyDirectLimit,
     tiers,
   };
 }
 
-// ============ 配置管理 ============
+function fallbackTierId(tierValue: number): string {
+  const matched = DEFAULT_TIERS.find((tier) => tier.value === tierValue);
+  if (matched) return matched.id;
+  return `tier_${Math.max(1, Math.floor(tierValue))}`;
+}
+
+function normalizeLotteryRecord(rawRecord: StoredLotteryRecord): LotteryRecord | null {
+  const id = typeof rawRecord.id === "string" ? rawRecord.id.trim() : "";
+  const linuxdoIdRaw = typeof rawRecord.linuxdoId === "string"
+    ? rawRecord.linuxdoId
+    : typeof rawRecord.oderId === "string"
+      ? rawRecord.oderId
+      : "";
+  const linuxdoId = linuxdoIdRaw.trim();
+  const username = typeof rawRecord.username === "string" ? rawRecord.username : "";
+  const tierName = typeof rawRecord.tierName === "string" ? rawRecord.tierName : "";
+  const tierValue = Number(rawRecord.tierValue);
+  const createdAt = Number(rawRecord.createdAt);
+
+  if (!id || !linuxdoId || !tierName) return null;
+  if (!Number.isFinite(tierValue) || !Number.isFinite(createdAt)) return null;
+
+  const tierId = typeof rawRecord.tierId === "string" && rawRecord.tierId.trim()
+    ? rawRecord.tierId
+    : fallbackTierId(tierValue);
+  const directCredit = typeof rawRecord.directCredit === "boolean" ? rawRecord.directCredit : false;
+  const creditedQuota = Number(rawRecord.creditedQuota);
+
+  return {
+    id,
+    linuxdoId,
+    username,
+    tierId,
+    tierName,
+    tierValue,
+    directCredit,
+    creditedQuota: Number.isFinite(creditedQuota) ? creditedQuota : undefined,
+    createdAt,
+  };
+}
+
+function normalizeLotteryRecords(records: StoredLotteryRecord[]): LotteryRecord[] {
+  const normalized: LotteryRecord[] = [];
+  for (const record of records) {
+    const parsed = normalizeLotteryRecord(record);
+    if (parsed) normalized.push(parsed);
+  }
+  return normalized;
+}
 
 export async function getLotteryConfig(): Promise<LotteryConfig> {
   const fallback = cloneDefaultLotteryConfig();
   try {
     const config = await kv.get<Partial<LotteryConfig>>(LOTTERY_CONFIG_KEY);
     if (!config) {
-      try { await kv.set(LOTTERY_CONFIG_KEY, fallback); } catch { /* ignore */ }
+      try {
+        await kv.set(LOTTERY_CONFIG_KEY, fallback);
+      } catch {
+        // ignore
+      }
       return fallback;
     }
     return sanitizeLotteryConfig(config);
@@ -99,8 +156,6 @@ export async function updateLotteryConfig(config: Partial<LotteryConfig>): Promi
   const current = await getLotteryConfig();
   await kv.set(LOTTERY_CONFIG_KEY, { ...current, ...config });
 }
-
-// ============ 每日免费次数 ============
 
 export async function tryClaimDailyFree(linuxdoId: number): Promise<boolean> {
   const today = getTodayDateString();
@@ -122,8 +177,6 @@ export async function checkDailyLimit(linuxdoId: number): Promise<boolean> {
   const result = await kv.get(key);
   return result !== null;
 }
-
-// ============ 每日直充额度 ============
 
 export async function getTodayDirectTotal(): Promise<number> {
   const today = getTodayDateString();
@@ -172,8 +225,6 @@ export async function rollbackDailyDirectQuota(dollars: number): Promise<void> {
   await kv.decrby(key, cents);
 }
 
-// ============ 加权随机 ============
-
 function weightedRandomSelect(tiers: LotteryTier[]): LotteryTier | null {
   const totalWeight = tiers.reduce((sum, tier) => sum + tier.probability, 0);
   if (totalWeight <= 0) return null;
@@ -185,16 +236,13 @@ function weightedRandomSelect(tiers: LotteryTier[]): LotteryTier | null {
   return tiers[tiers.length - 1];
 }
 
-// ============ 直充模式抽奖 ============
-
 export async function spinLotteryDirect(
   linuxdoId: number,
   username: string,
   newApiUserId: number
 ): Promise<{ success: boolean; record?: LotteryRecord; message: string; uncertain?: boolean }> {
-  const { creditQuotaToUser } = await import('./new-api');
+  const { creditQuotaToUser } = await import("./new-api");
 
-  // 第一步：原子性占用每日免费次数
   let usedDailyFree = false;
   try {
     const dailyResult = await tryClaimDailyFree(linuxdoId);
@@ -208,38 +256,38 @@ export async function spinLotteryDirect(
 
   const rollbackSpinCount = async () => {
     if (usedDailyFree) {
-      try { await releaseDailyFree(linuxdoId); } catch { /* ignore */ }
+      try {
+        await releaseDailyFree(linuxdoId);
+      } catch {
+        // ignore
+      }
     }
   };
 
   let reservedDollars = 0;
 
   try {
-    // 第二步：检查配置
     const config = await getLotteryConfig();
     if (!config.enabled) {
       await rollbackSpinCount();
       return { success: false, message: "抽奖活动暂未开放" };
     }
 
-    // 第三步：获取剩余额度并过滤可选档位
     const todayTotal = await getTodayDirectTotal();
     const remainingQuota = config.dailyDirectLimit - todayTotal;
-    const affordableTiers = config.tiers.filter(t => t.probability > 0 && t.value <= remainingQuota);
+    const affordableTiers = config.tiers.filter((tier) => tier.probability > 0 && tier.value <= remainingQuota);
 
     if (affordableTiers.length === 0) {
       await rollbackSpinCount();
       return { success: false, message: "今日发放额度已达上限，请明日再试" };
     }
 
-    // 加权随机选择
     const selectedTier = weightedRandomSelect(affordableTiers);
     if (!selectedTier) {
       await rollbackSpinCount();
       return { success: false, message: "抽奖配置异常，请联系管理员" };
     }
 
-    // 第四步：原子性预占每日直充额度
     const reserveResult = await reserveDailyDirectQuota(selectedTier.value);
     if (!reserveResult.success) {
       await rollbackSpinCount();
@@ -247,16 +295,15 @@ export async function spinLotteryDirect(
     }
     reservedDollars = selectedTier.value;
 
-    // 第五步：执行直充
     const creditResult = await creditQuotaToUser(newApiUserId, selectedTier.value);
 
-    // 处理不确定的情况
     if (creditResult.uncertain) {
       console.warn("直充结果不确定，不回滚:", creditResult.message);
       const pendingRecord: LotteryRecord = {
         id: `lottery_pending_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-        oderId: String(linuxdoId),
+        linuxdoId: String(linuxdoId),
         username,
+        tierId: selectedTier.id,
         tierName: `[待确认] ${selectedTier.name}`,
         tierValue: selectedTier.value,
         directCredit: true,
@@ -265,7 +312,9 @@ export async function spinLotteryDirect(
       try {
         await kv.lpush(LOTTERY_RECORDS_KEY, pendingRecord);
         await kv.lpush(`${LOTTERY_USER_RECORDS_PREFIX}${linuxdoId}`, pendingRecord);
-      } catch { /* ignore */ }
+      } catch {
+        // ignore
+      }
       return { success: false, message: "充值结果不确定，请稍后检查余额", uncertain: true };
     }
 
@@ -275,12 +324,11 @@ export async function spinLotteryDirect(
       return { success: false, message: "充值失败，请稍后重试" };
     }
 
-    // ===== 提交点：直充成功，不再回滚 =====
-
     const record: LotteryRecord = {
       id: `lottery_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-      oderId: String(linuxdoId),
+      linuxdoId: String(linuxdoId),
       username,
+      tierId: selectedTier.id,
       tierName: selectedTier.name,
       tierValue: selectedTier.value,
       directCredit: true,
@@ -288,16 +336,22 @@ export async function spinLotteryDirect(
       createdAt: Date.now(),
     };
 
-    // 写入记录（best-effort）
-    try { await kv.lpush(LOTTERY_RECORDS_KEY, record); } catch { /* ignore */ }
-    try { await kv.lpush(`${LOTTERY_USER_RECORDS_PREFIX}${linuxdoId}`, record); } catch { /* ignore */ }
+    try {
+      await kv.lpush(LOTTERY_RECORDS_KEY, record);
+    } catch {
+      // ignore
+    }
+    try {
+      await kv.lpush(`${LOTTERY_USER_RECORDS_PREFIX}${linuxdoId}`, record);
+    } catch {
+      // ignore
+    }
 
     return {
       success: true,
       record,
       message: `恭喜获得 ${selectedTier.name}！已直接充值到您的账户`,
     };
-
   } catch (error) {
     console.error("spinLotteryDirect 异常:", error);
     if (reservedDollars > 0) {
@@ -308,31 +362,68 @@ export async function spinLotteryDirect(
   }
 }
 
-// ============ 记录查询 ============
-
 export async function getLotteryRecords(limit: number = 50, offset: number = 0): Promise<LotteryRecord[]> {
-  return await kv.lrange<LotteryRecord>(LOTTERY_RECORDS_KEY, offset, offset + limit - 1);
+  const rawRecords = await kv.lrange<StoredLotteryRecord>(LOTTERY_RECORDS_KEY, offset, offset + limit - 1);
+  return normalizeLotteryRecords(rawRecords);
 }
 
 export async function getUserLotteryRecords(linuxdoId: number, limit: number = 20): Promise<LotteryRecord[]> {
-  return await kv.lrange<LotteryRecord>(`${LOTTERY_USER_RECORDS_PREFIX}${linuxdoId}`, 0, limit - 1);
+  const rawRecords = await kv.lrange<StoredLotteryRecord>(`${LOTTERY_USER_RECORDS_PREFIX}${linuxdoId}`, 0, limit - 1);
+  return normalizeLotteryRecords(rawRecords);
 }
 
-// ============ 统计 ============
+export async function getTodayLotteryRecords(options?: {
+  includePending?: boolean;
+  maxScan?: number;
+}): Promise<LotteryRecord[]> {
+  const includePending = options?.includePending ?? true;
+  const maxScan = Math.max(TODAY_RECORDS_SCAN_BATCH, options?.maxScan ?? TODAY_RECORDS_MAX_SCAN);
+  const todayStart = getChinaDayStartTimestamp();
+  const todayRecords: LotteryRecord[] = [];
+  let offset = 0;
+
+  while (offset < maxScan) {
+    const batchRaw = await kv.lrange<StoredLotteryRecord>(
+      LOTTERY_RECORDS_KEY,
+      offset,
+      offset + TODAY_RECORDS_SCAN_BATCH - 1
+    );
+    if (batchRaw.length === 0) break;
+
+    const batchRecords = normalizeLotteryRecords(batchRaw);
+    for (const record of batchRecords) {
+      if (record.createdAt < todayStart) {
+        return todayRecords;
+      }
+      if (!includePending && record.tierName.startsWith("[待确认]")) {
+        continue;
+      }
+      todayRecords.push(record);
+    }
+
+    offset += batchRaw.length;
+    if (batchRaw.length < TODAY_RECORDS_SCAN_BATCH) break;
+  }
+
+  return todayRecords;
+}
 
 export async function getLotteryStats(): Promise<{
   todayDirectTotal: number;
+  todayUsers: number;
   todaySpins: number;
   totalRecords: number;
 }> {
-  const [todayDirectTotal, totalRecords] = await Promise.all([
+  const [todayDirectTotal, totalRecords, todayRecords] = await Promise.all([
     getTodayDirectTotal(),
     kv.llen(LOTTERY_RECORDS_KEY),
+    getTodayLotteryRecords({ includePending: false }),
   ]);
 
   return {
     todayDirectTotal,
-    todaySpins: 0, // 简化：可从记录中统计
+    todayUsers: new Set(todayRecords.map((record) => record.linuxdoId)).size,
+    todaySpins: todayRecords.length,
     totalRecords,
   };
 }
