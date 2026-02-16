@@ -110,6 +110,12 @@ export const kv = {
     return r.llen(key);
   },
 
+  /** LTRIM */
+  async ltrim(key: string, start: number, stop: number): Promise<"OK"> {
+    const r = getRedisInstance();
+    return r.ltrim(key, start, stop);
+  },
+
   /** SADD */
   async sadd(key: string, ...members: (string | number)[]): Promise<number> {
     const r = getRedisInstance();

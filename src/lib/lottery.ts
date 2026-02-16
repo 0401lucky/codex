@@ -47,13 +47,25 @@ const DEFAULT_CONFIG: LotteryConfig = {
 };
 
 const LOTTERY_CONFIG_KEY = "lottery:config";
-const LOTTERY_RECORDS_KEY = "lottery:records";
+const LOTTERY_RECORDS_KEY = "lottery:records"; // 兼容旧数据读取
+const LOTTERY_RECORDS_RECENT_KEY = "lottery:records:recent";
+const LOTTERY_RECORDS_DAY_PREFIX = "lottery:records:day:";
+const LOTTERY_RECORDS_TOTAL_KEY = "lottery:records:total";
+const LOTTERY_RECORDS_LEGACY_FALLBACK_CHECK_PREFIX = "lottery:records:legacy-fallback-checked:";
 const LOTTERY_USER_RECORDS_PREFIX = "lottery:user:records:";
 const LOTTERY_DAILY_PREFIX = "lottery:daily:";
 const LOTTERY_DAILY_DIRECT_KEY = "lottery:daily_direct:";
 const DIRECT_AMOUNT_SCALE = 100;
 const TODAY_RECORDS_SCAN_BATCH = 200;
 const TODAY_RECORDS_MAX_SCAN = 20000;
+const RECORDS_RECENT_MAX_LENGTH = 5000;
+const USER_RECORDS_MAX_LENGTH = 200;
+const RECORDS_DAY_ARCHIVE_TTL_SECONDS = 400 * 24 * 60 * 60;
+const RECORDS_MIGRATION_CHUNK_SIZE = 500;
+const LOTTERY_CONFIG_MAX_DAILY_LIMIT = 1_000_000;
+const LOTTERY_CONFIG_MAX_TIER_VALUE = 100_000;
+
+let totalRecordsInitPromise: Promise<void> | null = null;
 
 function cloneDefaultLotteryConfig(): LotteryConfig {
   return { ...DEFAULT_CONFIG, tiers: DEFAULT_TIERS.map((tier) => ({ ...tier })) };
@@ -68,8 +80,12 @@ function sanitizeLotteryConfig(config: Partial<LotteryConfig>): LotteryConfig {
         return {
           id: typeof tier?.id === "string" && tier.id.trim() ? tier.id : base.id,
           name: typeof tier?.name === "string" && tier.name.trim() ? tier.name : base.name,
-          value: typeof tier?.value === "number" && Number.isFinite(tier.value) ? tier.value : base.value,
-          probability: typeof tier?.probability === "number" && Number.isFinite(tier.probability) ? tier.probability : base.probability,
+          value: typeof tier?.value === "number" && Number.isFinite(tier.value) && tier.value > 0
+            ? Math.min(tier.value, LOTTERY_CONFIG_MAX_TIER_VALUE)
+            : base.value,
+          probability: typeof tier?.probability === "number" && Number.isFinite(tier.probability) && tier.probability >= 0
+            ? tier.probability
+            : base.probability,
           color: typeof tier?.color === "string" && tier.color.trim() ? tier.color : base.color,
         };
       })
@@ -77,8 +93,8 @@ function sanitizeLotteryConfig(config: Partial<LotteryConfig>): LotteryConfig {
 
   return {
     enabled: typeof config.enabled === "boolean" ? config.enabled : fallback.enabled,
-    dailyDirectLimit: typeof config.dailyDirectLimit === "number" && Number.isFinite(config.dailyDirectLimit)
-      ? config.dailyDirectLimit
+    dailyDirectLimit: typeof config.dailyDirectLimit === "number" && Number.isFinite(config.dailyDirectLimit) && config.dailyDirectLimit >= 0
+      ? Math.min(config.dailyDirectLimit, LOTTERY_CONFIG_MAX_DAILY_LIMIT)
       : fallback.dailyDirectLimit,
     tiers,
   };
@@ -132,6 +148,125 @@ function normalizeLotteryRecords(records: StoredLotteryRecord[]): LotteryRecord[
     if (parsed) normalized.push(parsed);
   }
   return normalized;
+}
+
+function getTodayRecordsDayKey(): string {
+  return `${LOTTERY_RECORDS_DAY_PREFIX}${getTodayDateString()}`;
+}
+
+function toSafePositiveNumber(value: unknown): number | null {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return numeric;
+}
+
+async function ensureTotalRecordsCounterInitialized(): Promise<void> {
+  if (!totalRecordsInitPromise) {
+    totalRecordsInitPromise = (async () => {
+      const current = await kv.get<number>(LOTTERY_RECORDS_TOTAL_KEY);
+      if (toSafePositiveNumber(current) !== null) return;
+      const legacyTotal = await kv.llen(LOTTERY_RECORDS_KEY);
+      await kv.set(LOTTERY_RECORDS_TOTAL_KEY, legacyTotal, { nx: true });
+    })().catch((error) => {
+      totalRecordsInitPromise = null;
+      throw error;
+    });
+  }
+  await totalRecordsInitPromise;
+}
+
+async function incrementTotalRecordsCounter(): Promise<void> {
+  await ensureTotalRecordsCounterInitialized();
+  await kv.incr(LOTTERY_RECORDS_TOTAL_KEY);
+}
+
+async function appendLotteryRecord(record: LotteryRecord, linuxdoId: number): Promise<void> {
+  const userRecordsKey = `${LOTTERY_USER_RECORDS_PREFIX}${linuxdoId}`;
+  const dayKey = getTodayRecordsDayKey();
+
+  try {
+    await kv.lpush(LOTTERY_RECORDS_RECENT_KEY, record);
+    await kv.ltrim(LOTTERY_RECORDS_RECENT_KEY, 0, RECORDS_RECENT_MAX_LENGTH - 1);
+  } catch {
+    // ignore
+  }
+
+  try {
+    await kv.lpush(dayKey, record);
+    await kv.expire(dayKey, RECORDS_DAY_ARCHIVE_TTL_SECONDS);
+  } catch {
+    // ignore
+  }
+
+  try {
+    await kv.lpush(userRecordsKey, record);
+    await kv.ltrim(userRecordsKey, 0, USER_RECORDS_MAX_LENGTH - 1);
+  } catch {
+    // ignore
+  }
+
+  try {
+    await incrementTotalRecordsCounter();
+  } catch {
+    // ignore
+  }
+}
+
+async function getLegacyTodayLotteryRecords(maxScan: number): Promise<LotteryRecord[]> {
+  const todayStart = getChinaDayStartTimestamp();
+  const todayRecords: LotteryRecord[] = [];
+  let offset = 0;
+
+  while (offset < maxScan) {
+    const batchRaw = await kv.lrange<StoredLotteryRecord>(
+      LOTTERY_RECORDS_KEY,
+      offset,
+      offset + TODAY_RECORDS_SCAN_BATCH - 1
+    );
+    if (batchRaw.length === 0) break;
+
+    const batchRecords = normalizeLotteryRecords(batchRaw);
+    for (const record of batchRecords) {
+      if (record.createdAt < todayStart) {
+        return todayRecords;
+      }
+      todayRecords.push(record);
+    }
+
+    offset += batchRaw.length;
+    if (batchRaw.length < TODAY_RECORDS_SCAN_BATCH) break;
+  }
+
+  return todayRecords;
+}
+
+async function migrateLegacyTodayRecords(dayKey: string, records: LotteryRecord[]): Promise<void> {
+  if (records.length === 0) return;
+
+  // 旧列表是“最新在前”，迁移到新列表时倒序 lpush 才能保持同样顺序。
+  const reversed = [...records].reverse();
+  for (let index = 0; index < reversed.length; index += RECORDS_MIGRATION_CHUNK_SIZE) {
+    const chunk = reversed.slice(index, index + RECORDS_MIGRATION_CHUNK_SIZE);
+    await kv.lpush(dayKey, ...chunk);
+  }
+  await kv.expire(dayKey, RECORDS_DAY_ARCHIVE_TTL_SECONDS);
+}
+
+async function getTotalRecordsCount(): Promise<number> {
+  try {
+    await ensureTotalRecordsCounterInitialized();
+    const total = await kv.get<number>(LOTTERY_RECORDS_TOTAL_KEY);
+    const safe = toSafePositiveNumber(total);
+    if (safe !== null) return safe;
+  } catch {
+    // ignore
+  }
+
+  try {
+    return await kv.llen(LOTTERY_RECORDS_RECENT_KEY);
+  } catch {
+    return 0;
+  }
 }
 
 export async function getLotteryConfig(): Promise<LotteryConfig> {
@@ -310,8 +445,7 @@ export async function spinLotteryDirect(
         createdAt: Date.now(),
       };
       try {
-        await kv.lpush(LOTTERY_RECORDS_KEY, pendingRecord);
-        await kv.lpush(`${LOTTERY_USER_RECORDS_PREFIX}${linuxdoId}`, pendingRecord);
+        await appendLotteryRecord(pendingRecord, linuxdoId);
       } catch {
         // ignore
       }
@@ -337,12 +471,7 @@ export async function spinLotteryDirect(
     };
 
     try {
-      await kv.lpush(LOTTERY_RECORDS_KEY, record);
-    } catch {
-      // ignore
-    }
-    try {
-      await kv.lpush(`${LOTTERY_USER_RECORDS_PREFIX}${linuxdoId}`, record);
+      await appendLotteryRecord(record, linuxdoId);
     } catch {
       // ignore
     }
@@ -363,8 +492,24 @@ export async function spinLotteryDirect(
 }
 
 export async function getLotteryRecords(limit: number = 50, offset: number = 0): Promise<LotteryRecord[]> {
-  const rawRecords = await kv.lrange<StoredLotteryRecord>(LOTTERY_RECORDS_KEY, offset, offset + limit - 1);
-  return normalizeLotteryRecords(rawRecords);
+  const safeLimit = Math.max(1, Math.min(limit, 200));
+  const safeOffset = Math.max(0, offset);
+  const latestRaw = await kv.lrange<StoredLotteryRecord>(
+    LOTTERY_RECORDS_RECENT_KEY,
+    safeOffset,
+    safeOffset + safeLimit - 1
+  );
+  if (latestRaw.length > 0) {
+    return normalizeLotteryRecords(latestRaw);
+  }
+
+  // 兼容旧版本数据（仍在 lottery:records）
+  const legacyRaw = await kv.lrange<StoredLotteryRecord>(
+    LOTTERY_RECORDS_KEY,
+    safeOffset,
+    safeOffset + safeLimit - 1
+  );
+  return normalizeLotteryRecords(legacyRaw);
 }
 
 export async function getUserLotteryRecords(linuxdoId: number, limit: number = 20): Promise<LotteryRecord[]> {
@@ -378,31 +523,34 @@ export async function getTodayLotteryRecords(options?: {
 }): Promise<LotteryRecord[]> {
   const includePending = options?.includePending ?? true;
   const maxScan = Math.max(TODAY_RECORDS_SCAN_BATCH, options?.maxScan ?? TODAY_RECORDS_MAX_SCAN);
-  const todayStart = getChinaDayStartTimestamp();
-  const todayRecords: LotteryRecord[] = [];
-  let offset = 0;
+  const dayKey = getTodayRecordsDayKey();
+  const todayRaw = await kv.lrange<StoredLotteryRecord>(dayKey, 0, maxScan - 1);
+  let todayRecords = normalizeLotteryRecords(todayRaw);
 
-  while (offset < maxScan) {
-    const batchRaw = await kv.lrange<StoredLotteryRecord>(
-      LOTTERY_RECORDS_KEY,
-      offset,
-      offset + TODAY_RECORDS_SCAN_BATCH - 1
-    );
-    if (batchRaw.length === 0) break;
-
-    const batchRecords = normalizeLotteryRecords(batchRaw);
-    for (const record of batchRecords) {
-      if (record.createdAt < todayStart) {
-        return todayRecords;
+  // 兼容旧版本：当天分桶为空时，最多回退扫描一次旧 key，避免每次请求都全量扫描。
+  if (todayRecords.length === 0) {
+    const today = getTodayDateString();
+    const fallbackCheckedKey = `${LOTTERY_RECORDS_LEGACY_FALLBACK_CHECK_PREFIX}${today}`;
+    const checked = await kv.get<string>(fallbackCheckedKey);
+    if (!checked) {
+      todayRecords = await getLegacyTodayLotteryRecords(maxScan);
+      if (todayRecords.length > 0) {
+        try {
+          await migrateLegacyTodayRecords(dayKey, todayRecords);
+        } catch {
+          // ignore
+        }
       }
-      if (!includePending && record.tierName.startsWith("[待确认]")) {
-        continue;
+      try {
+        await kv.set(fallbackCheckedKey, "1", { ex: getSecondsUntilMidnight() + 3600 });
+      } catch {
+        // ignore
       }
-      todayRecords.push(record);
     }
+  }
 
-    offset += batchRaw.length;
-    if (batchRaw.length < TODAY_RECORDS_SCAN_BATCH) break;
+  if (!includePending) {
+    return todayRecords.filter((record) => !record.tierName.startsWith("[待确认]"));
   }
 
   return todayRecords;
@@ -416,7 +564,7 @@ export async function getLotteryStats(): Promise<{
 }> {
   const [todayDirectTotal, totalRecords, todayRecords] = await Promise.all([
     getTodayDirectTotal(),
-    kv.llen(LOTTERY_RECORDS_KEY),
+    getTotalRecordsCount(),
     getTodayLotteryRecords({ includePending: false }),
   ]);
 

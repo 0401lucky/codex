@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthUser } from "@/lib/auth";
 import { getTodayLotteryRecords } from "@/lib/lottery";
 
 interface RankingUser {
@@ -11,6 +12,11 @@ interface RankingUser {
 }
 
 export async function GET(request: NextRequest) {
+  const user = await getAuthUser();
+  if (!user) {
+    return NextResponse.json({ success: false, message: "未登录" }, { status: 401 });
+  }
+
   const limitParam = request.nextUrl.searchParams.get("limit");
   const limit = Math.min(Math.max(Number(limitParam) || 10, 1), 50);
 

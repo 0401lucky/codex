@@ -19,7 +19,7 @@ interface UserMapping {
  * 2. 缓存未命中时直接查 MySQL
  * 3. 缓存结果到 Redis
  */
-export async function getNewApiUserId(linuxdoId: number, _linuxdoUsername?: string): Promise<number | null> {
+export async function getNewApiUserId(linuxdoId: number): Promise<number | null> {
   const cacheKey = `${MAPPING_PREFIX}${linuxdoId}`;
 
   // 1. 查缓存

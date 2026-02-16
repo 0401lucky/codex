@@ -3,13 +3,44 @@ import { cookies } from "next/headers";
 import { exchangeCodeForToken, getUserInfo } from "@/lib/linuxdo-oauth";
 import { createSessionToken, isAdminUsername } from "@/lib/auth";
 
+function sanitizeEnvValue(value: string | undefined): string {
+  if (!value) return "";
+  return value.replace(/\\r\\n|\\n|\\r/g, "").replace(/[\r\n]/g, "").trim();
+}
+
+function resolveAppUrl(request: NextRequest): string {
+  const configuredAppUrl = sanitizeEnvValue(process.env.NEXT_PUBLIC_APP_URL);
+  if (configuredAppUrl) {
+    try {
+      return new URL(configuredAppUrl).origin;
+    } catch {
+      throw new Error("NEXT_PUBLIC_APP_URL 配置不合法，必须是完整 URL");
+    }
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("生产环境必须设置 NEXT_PUBLIC_APP_URL，避免回调重定向到不可信 Host");
+  }
+
+  return request.nextUrl.origin;
+}
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const code = searchParams.get("code");
   const state = searchParams.get("state");
   const error = searchParams.get("error");
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || request.nextUrl.origin;
+  let appUrl = "";
+  try {
+    appUrl = resolveAppUrl(request);
+  } catch (configError) {
+    console.error("OAuth callback config error:", configError);
+    return NextResponse.json(
+      { success: false, message: "服务端 OAuth 配置错误，请联系管理员" },
+      { status: 500 }
+    );
+  }
 
   // OAuth 错误
   if (error) {

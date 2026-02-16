@@ -67,7 +67,8 @@ export default function AdminLotteryPage() {
 
   const handleToggle = async () => {
     if (!config) return;
-    const newEnabled = !config.enabled;
+    const previousEnabled = config.enabled;
+    const newEnabled = !previousEnabled;
     setConfig({ ...config, enabled: newEnabled });
 
     try {
@@ -80,9 +81,13 @@ export default function AdminLotteryPage() {
       if (data.success) {
         setConfig(data.config);
         setMessage({ type: 'success', text: newEnabled ? '抽奖已开启' : '抽奖已关闭' });
+      } else {
+        setConfig({ ...config, enabled: previousEnabled });
+        setMessage({ type: 'error', text: data.message || '开关更新失败' });
       }
     } catch {
-      setConfig({ ...config, enabled: !newEnabled }); // rollback
+      setConfig({ ...config, enabled: previousEnabled }); // rollback
+      setMessage({ type: 'error', text: '网络错误，开关未生效' });
     }
     setTimeout(() => setMessage(null), 3000);
   };
