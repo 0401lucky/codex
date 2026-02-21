@@ -21,8 +21,14 @@ function isMysqlUnknownColumnError(error: unknown): boolean {
   return code === 'ER_BAD_FIELD_ERROR';
 }
 
+function normalizeLinuxDoIdColumn(value: unknown): LinuxDoIdColumn | null {
+  if (value === 'linux_do_id' || value === 'linuxdo_id') return value;
+  return null;
+}
+
 async function queryNewApiUserIdFromMysql(linuxdoId: number): Promise<number | null> {
-  const cachedColumn = await kv.get<LinuxDoIdColumn>(MAPPING_COLUMN_CACHE_KEY);
+  const cachedColumnRaw = await kv.get<unknown>(MAPPING_COLUMN_CACHE_KEY);
+  const cachedColumn = normalizeLinuxDoIdColumn(cachedColumnRaw);
   // 生产环境主字段是 linux_do_id，linuxdo_id 仅用于兼容旧结构
   const allColumns: LinuxDoIdColumn[] = ['linux_do_id', 'linuxdo_id'];
   const columns = cachedColumn

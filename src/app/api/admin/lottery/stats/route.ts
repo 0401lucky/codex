@@ -17,13 +17,16 @@ export async function GET() {
     ]);
 
     // 有 pending 记录时自动触发对账（非阻塞）
-    let reconcileResult = null;
+    let reconcileTriggered = false;
     if (pendingCount > 0) {
-      try {
-        reconcileResult = await reconcilePendingRecords();
-      } catch (e) {
-        console.error("Auto reconcile failed:", e);
-      }
+      reconcileTriggered = true;
+      void reconcilePendingRecords()
+        .then((result) => {
+          console.log("Auto reconcile finished:", result);
+        })
+        .catch((e) => {
+          console.error("Auto reconcile failed:", e);
+        });
     }
 
     return NextResponse.json({
@@ -37,7 +40,7 @@ export async function GET() {
         totalRecords: stats.totalRecords,
         enabled: config.enabled,
         pendingRecords: pendingCount,
-        ...(reconcileResult ? { reconcileResult } : {}),
+        reconcileTriggered,
       },
       recentRecords: recentRecords.slice(0, 10),
     });

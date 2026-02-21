@@ -74,7 +74,7 @@ const PENDING_RECORDS_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 超过 24h 的 pendin
 export interface PendingLotteryRecord {
   record: LotteryRecord;
   newApiUserId: number;
-  expectedQuota: number;
+  expectedQuota: number | null;
   reservationDay: string;
   storedAt: number;
 }
@@ -550,7 +550,10 @@ export async function spinLotteryDirect(
       await storePendingRecord({
         record: pendingRecord,
         newApiUserId,
-        expectedQuota: creditResult.newQuota ?? 0,
+        // 无法拿到明确目标额度时，标记为 null，避免后续对账误判“已到账”
+        expectedQuota: typeof creditResult.newQuota === "number" && creditResult.newQuota > 0
+          ? creditResult.newQuota
+          : null,
         reservationDay: today,
         storedAt: Date.now(),
       });
@@ -750,7 +753,14 @@ export async function reconcilePendingRecords(): Promise<{
         continue;
       }
 
-      if (typeof quotaResult.quota === "number" && quotaResult.quota >= pending.expectedQuota) {
+      const expectedQuota = Number(pending.expectedQuota);
+      if (!Number.isFinite(expectedQuota) || expectedQuota <= 0) {
+        // 目标额度未知时不做“已到账/未到账”判定，避免误判
+        remaining.push(pending);
+        continue;
+      }
+
+      if (typeof quotaResult.quota === "number" && quotaResult.quota >= expectedQuota) {
         confirmed++;
         console.log("[reconcile] 已确认到账:", pending.record.id);
       } else {
