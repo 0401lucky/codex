@@ -10,8 +10,9 @@ export async function POST() {
   }
 
   try {
-    // 用 linuxdoId 查找 newapi userId（优先按 linuxdo_id 精确匹配）
-    const newApiUserId = await getNewApiUserId(user.linuxdoId);
+    // 用 linuxdoId 查找 newapi userId（优先按 linux_do_id 精确匹配）
+    const newApiUserId = await getNewApiUserId(user.linuxdoId)
+      ?? await getNewApiUserId(user.linuxdoId, { forceRefresh: true });
     if (!newApiUserId) {
       return NextResponse.json({
         success: false,

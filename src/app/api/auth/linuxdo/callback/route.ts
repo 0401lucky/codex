@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { exchangeCodeForToken, getUserInfo } from "@/lib/linuxdo-oauth";
 import { createSessionToken, isAdminUsername } from "@/lib/auth";
+import { clearUserMapping } from "@/lib/user-mapping";
 
 function sanitizeEnvValue(value: string | undefined): string {
   if (!value) return "";
@@ -68,6 +69,13 @@ export async function GET(request: NextRequest) {
 
     // 2. access_token → user info
     const userInfo = await getUserInfo(tokenResult.access_token);
+
+    // 用户每次登录福利站时，清理一次映射缓存，避免新注册后被旧的 miss 缓存命中
+    try {
+      await clearUserMapping(userInfo.id);
+    } catch (cacheError) {
+      console.warn("Clear user mapping cache failed:", cacheError);
+    }
 
     // 3. 创建 session
     const sessionToken = createSessionToken({

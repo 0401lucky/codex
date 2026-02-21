@@ -51,9 +51,18 @@ interface RankingUser {
   count: number;
 }
 
+function normalizeAvatarUrl(avatarUrl?: string): string {
+  if (!avatarUrl) return '';
+  const normalized = avatarUrl.trim();
+  if (!normalized) return '';
+  if (normalized.startsWith('//')) return `https:${normalized}`;
+  return normalized;
+}
+
 export default function LotteryPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserData | null>(null);
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [records, setRecords] = useState<LotteryRecord[]>([]);
   const [canSpin, setCanSpin] = useState(false);
@@ -83,6 +92,15 @@ export default function LotteryPage() {
       return { ...tier, startAngle, endAngle };
     });
   }, [tiers]);
+
+  const userAvatarUrl = useMemo(
+    () => normalizeAvatarUrl(user?.avatarUrl),
+    [user?.avatarUrl]
+  );
+
+  useEffect(() => {
+    setAvatarLoadFailed(false);
+  }, [userAvatarUrl]);
 
   const tierVisualMap = useMemo(() => {
     const map = new Map<string, { icon: string; textClass: string; color: string }>();
@@ -377,8 +395,19 @@ export default function LotteryPage() {
             {user && (
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2 px-1.5 py-1.5 pr-4 bg-white/60 rounded-full border border-white/60 shadow-sm">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-white shadow-inner">
-                    <UserIcon className="w-4 h-4" />
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-white shadow-inner overflow-hidden">
+                    {userAvatarUrl && !avatarLoadFailed ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={userAvatarUrl}
+                        alt={`${user.displayName} 头像`}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                        onError={() => setAvatarLoadFailed(true)}
+                      />
+                    ) : (
+                      <UserIcon className="w-4 h-4" />
+                    )}
                   </div>
                   <div className="flex flex-col">
                     <span className="font-bold text-stone-700 text-xs leading-none mb-0.5">{user.displayName}</span>
