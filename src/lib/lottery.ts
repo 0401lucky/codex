@@ -53,11 +53,14 @@ const LOTTERY_RECORDS_DAY_PREFIX = "lottery:records:day:";
 const LOTTERY_RECORDS_TOTAL_KEY = "lottery:records:total";
 const LOTTERY_RECORDS_LEGACY_FALLBACK_CHECK_PREFIX = "lottery:records:legacy-fallback-checked:";
 const LOTTERY_USER_RECORDS_PREFIX = "lottery:user:records:";
+const LOTTERY_TOTAL_USERS_KEY = "lottery:users:all";
+const LOTTERY_TOTAL_USERS_INIT_KEY = "lottery:users:all:init";
 const LOTTERY_DAILY_PREFIX = "lottery:daily:";
 const LOTTERY_DAILY_DIRECT_KEY = "lottery:daily_direct:";
 const DIRECT_AMOUNT_SCALE = 100;
 const TODAY_RECORDS_SCAN_BATCH = 200;
 const TODAY_RECORDS_MAX_SCAN = 20000;
+const TOTAL_USERS_SCAN_BATCH = 500;
 const RECORDS_RECENT_MAX_LENGTH = 5000;
 const USER_RECORDS_MAX_LENGTH = 200;
 const RECORDS_DAY_ARCHIVE_TTL_SECONDS = 400 * 24 * 60 * 60;
@@ -77,6 +80,7 @@ export interface PendingLotteryRecord {
 }
 
 let totalRecordsInitPromise: Promise<void> | null = null;
+let totalUsersInitPromise: Promise<void> | null = null;
 
 function cloneDefaultLotteryConfig(): LotteryConfig {
   return { ...DEFAULT_CONFIG, tiers: DEFAULT_TIERS.map((tier) => ({ ...tier })) };
@@ -186,6 +190,44 @@ async function ensureTotalRecordsCounterInitialized(): Promise<void> {
   await totalRecordsInitPromise;
 }
 
+function extractLinuxDoIdFromUserRecordsKey(key: string): string | null {
+  if (!key.startsWith(LOTTERY_USER_RECORDS_PREFIX)) return null;
+  const linuxdoId = key.slice(LOTTERY_USER_RECORDS_PREFIX.length).trim();
+  return linuxdoId || null;
+}
+
+async function ensureTotalUsersSetInitialized(): Promise<void> {
+  if (!totalUsersInitPromise) {
+    totalUsersInitPromise = (async () => {
+      const initialized = await kv.get<string>(LOTTERY_TOTAL_USERS_INIT_KEY);
+      if (initialized === "1") return;
+
+      let cursor = "0";
+      do {
+        const [nextCursor, keys] = await kv.scan(cursor, {
+          match: `${LOTTERY_USER_RECORDS_PREFIX}*`,
+          count: TOTAL_USERS_SCAN_BATCH,
+        });
+        const linuxdoIds = keys
+          .map(extractLinuxDoIdFromUserRecordsKey)
+          .filter((linuxdoId): linuxdoId is string => !!linuxdoId);
+
+        if (linuxdoIds.length > 0) {
+          await kv.sadd(LOTTERY_TOTAL_USERS_KEY, ...linuxdoIds);
+        }
+
+        cursor = nextCursor;
+      } while (cursor !== "0");
+
+      await kv.set(LOTTERY_TOTAL_USERS_INIT_KEY, "1");
+    })().catch((error) => {
+      totalUsersInitPromise = null;
+      throw error;
+    });
+  }
+  await totalUsersInitPromise;
+}
+
 async function incrementTotalRecordsCounter(): Promise<void> {
   await ensureTotalRecordsCounterInitialized();
   await kv.incr(LOTTERY_RECORDS_TOTAL_KEY);
@@ -212,6 +254,12 @@ async function appendLotteryRecord(record: LotteryRecord, linuxdoId: number): Pr
   try {
     await kv.lpush(userRecordsKey, record);
     await kv.ltrim(userRecordsKey, 0, USER_RECORDS_MAX_LENGTH - 1);
+  } catch {
+    // ignore
+  }
+
+  try {
+    await kv.sadd(LOTTERY_TOTAL_USERS_KEY, String(linuxdoId));
   } catch {
     // ignore
   }
@@ -277,6 +325,19 @@ async function getTotalRecordsCount(): Promise<number> {
     return await kv.llen(LOTTERY_RECORDS_RECENT_KEY);
   } catch {
     return 0;
+  }
+}
+
+async function getTotalUsersCount(): Promise<number> {
+  try {
+    await ensureTotalUsersSetInitialized();
+    return await kv.scard(LOTTERY_TOTAL_USERS_KEY);
+  } catch {
+    try {
+      return await kv.scard(LOTTERY_TOTAL_USERS_KEY);
+    } catch {
+      return 0;
+    }
   }
 }
 
@@ -602,18 +663,21 @@ export async function getTodayLotteryRecords(options?: {
 
 export async function getLotteryStats(): Promise<{
   todayDirectTotal: number;
+  totalUsers: number;
   todayUsers: number;
   todaySpins: number;
   totalRecords: number;
 }> {
-  const [todayDirectTotal, totalRecords, todayRecords] = await Promise.all([
+  const [todayDirectTotal, totalUsers, totalRecords, todayRecords] = await Promise.all([
     getTodayDirectTotal(),
+    getTotalUsersCount(),
     getTotalRecordsCount(),
     getTodayLotteryRecords({ includePending: false }),
   ]);
 
   return {
     todayDirectTotal,
+    totalUsers,
     todayUsers: new Set(todayRecords.map((record) => record.linuxdoId)).size,
     todaySpins: todayRecords.length,
     totalRecords,

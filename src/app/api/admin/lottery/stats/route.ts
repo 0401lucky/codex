@@ -31,6 +31,7 @@ export async function GET() {
       stats: {
         todayDirectTotal: stats.todayDirectTotal,
         dailyDirectLimit: config.dailyDirectLimit,
+        totalUsers: stats.totalUsers,
         todayUsers: stats.todayUsers,
         todaySpins: stats.todaySpins,
         totalRecords: stats.totalRecords,

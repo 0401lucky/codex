@@ -6,6 +6,7 @@ import { BarChart3, Users, DollarSign, Activity, Loader2, RefreshCw } from 'luci
 interface StatsData {
   todayDirectTotal: number;
   dailyDirectLimit: number;
+  totalUsers: number;
   todayUsers: number;
   todaySpins: number;
   totalRecords: number;
@@ -72,7 +73,7 @@ export default function AdminDashboard() {
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="glass-card rounded-2xl p-5">
           <div className="flex items-center gap-3 mb-3">
             <div className="p-2 bg-green-100 rounded-xl"><DollarSign className="w-5 h-5 text-green-600" /></div>
@@ -86,6 +87,15 @@ export default function AdminDashboard() {
               style={{ width: `${Math.min(100, ((stats?.todayDirectTotal || 0) / (stats?.dailyDirectLimit || 1)) * 100)}%` }}
             />
           </div>
+        </div>
+
+        <div className="glass-card rounded-2xl p-5">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="p-2 bg-indigo-100 rounded-xl"><Users className="w-5 h-5 text-indigo-600" /></div>
+            <span className="text-sm font-bold text-stone-500">总用户数</span>
+          </div>
+          <div className="text-2xl font-black text-stone-700">{stats?.totalUsers || 0}</div>
+          <div className="text-xs text-stone-400 mt-1">累计参与抽奖用户</div>
         </div>
 
         <div className="glass-card rounded-2xl p-5">

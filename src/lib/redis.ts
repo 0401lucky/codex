@@ -134,6 +134,29 @@ export const kv = {
     return r.smembers(key);
   },
 
+  /** SCAN */
+  async scan(
+    cursor: string | number,
+    opts?: { match?: string; count?: number }
+  ): Promise<[string, string[]]> {
+    const r = getRedisInstance();
+    const cursorText = String(cursor);
+    const count = typeof opts?.count === "number" && opts.count > 0
+      ? Math.floor(opts.count)
+      : undefined;
+
+    if (opts?.match && count) {
+      return r.scan(cursorText, "MATCH", opts.match, "COUNT", count);
+    }
+    if (opts?.match) {
+      return r.scan(cursorText, "MATCH", opts.match);
+    }
+    if (count) {
+      return r.scan(cursorText, "COUNT", count);
+    }
+    return r.scan(cursorText);
+  },
+
   /** SISMEMBER */
   async sismember(key: string, member: string): Promise<number> {
     const r = getRedisInstance();
