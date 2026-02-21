@@ -1,6 +1,7 @@
-import mysql, { Pool, PoolOptions } from 'mysql2/promise';
+import mysql, { Pool, PoolOptions, QueryOptions } from 'mysql2/promise';
 
 let pool: Pool | null = null;
+type QueryParams = NonNullable<QueryOptions['values']>;
 
 function getPool(): Pool {
   if (pool) return pool;
@@ -30,13 +31,15 @@ function getPool(): Pool {
 }
 
 export const db = {
-  async query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]> {
+  async query<T = Record<string, unknown>>(sql: string, params?: QueryParams): Promise<T[]> {
     const p = getPool();
-    const [rows] = await p.execute(sql, params);
+    const [rows] = typeof params === 'undefined'
+      ? await p.execute(sql)
+      : await p.execute(sql, params);
     return rows as T[];
   },
 
-  async queryOne<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T | null> {
+  async queryOne<T = Record<string, unknown>>(sql: string, params?: QueryParams): Promise<T | null> {
     const rows = await this.query<T>(sql, params);
     return rows[0] ?? null;
   },
