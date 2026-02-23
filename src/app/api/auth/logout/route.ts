@@ -12,7 +12,7 @@ export async function POST() {
       console.error("Revoke session token failed:", error);
     }
   }
-  cookieStore.delete("app_session");
+  cookieStore.set("app_session", "", { maxAge: 0, path: "/" });
 
   return NextResponse.json({ success: true, message: "已登出" });
 }

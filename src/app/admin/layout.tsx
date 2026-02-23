@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Shield, Loader2 } from 'lucide-react';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -55,15 +56,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <span className="font-black text-stone-700 text-lg">管理后台</span>
             </div>
             <div className="flex items-center gap-2">
-              <a href="/admin" className="px-3 py-1.5 text-sm font-bold text-stone-600 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors">
+              <Link href="/admin" className="px-3 py-1.5 text-sm font-bold text-stone-600 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors">
                 仪表盘
-              </a>
-              <a href="/admin/lottery" className="px-3 py-1.5 text-sm font-bold text-stone-600 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors">
+              </Link>
+              <Link href="/admin/lottery" className="px-3 py-1.5 text-sm font-bold text-stone-600 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors">
                 抽奖配置
-              </a>
-              <a href="/lottery" className="px-3 py-1.5 text-sm font-bold text-stone-500 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors">
+              </Link>
+              <Link href="/lottery" className="px-3 py-1.5 text-sm font-bold text-stone-500 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors">
                 返回抽奖
-              </a>
+              </Link>
             </div>
           </div>
         </div>

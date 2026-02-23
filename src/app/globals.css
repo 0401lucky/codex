@@ -91,10 +91,6 @@ body {
     @apply bg-clip-text text-transparent bg-gradient-to-br from-amber-400 via-orange-400 to-amber-600;
   }
 
-  .animate-spin {
-    animation: spin 1s linear infinite;
-  }
-
   .animate-spin-slow {
     animation: spin 8s linear infinite;
   }
@@ -211,6 +207,8 @@ body {
   .animate-float,
   .animate-pulse,
   .animate-pulse-glow,
+  .animate-fade-in,
+  .animate-scale-in,
   .shine-effect::after,
   .animate-pointer-wobble {
     animation: none !important;

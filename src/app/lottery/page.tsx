@@ -56,6 +56,12 @@ function normalizeAvatarUrl(avatarUrl?: string): string {
   const normalized = avatarUrl.trim();
   if (!normalized) return '';
   if (normalized.startsWith('//')) return `https:${normalized}`;
+  try {
+    const protocol = new URL(normalized).protocol;
+    if (protocol !== 'https:' && protocol !== 'http:') return '';
+  } catch {
+    return '';
+  }
   return normalized;
 }
 
@@ -319,7 +325,7 @@ export default function LotteryPage() {
                 }
               };
               confettiFrameRef.current = requestAnimationFrame(frame);
-            });
+            }).catch(() => {});
           }, 6000);
         } else {
           setSpinning(false);
@@ -351,9 +357,22 @@ export default function LotteryPage() {
   };
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // ignore
+    }
     router.push('/login');
   };
+
+  useEffect(() => {
+    if (!showResultModal) return;
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowResultModal(false);
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [showResultModal]);
 
   const getConicGradient = () => {
     if (wheelTiers.length === 0) {
@@ -671,15 +690,15 @@ export default function LotteryPage() {
 
       {/* 中奖弹窗 */}
       {showResultModal && result && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-pink-900/40 backdrop-blur-sm transition-opacity" onClick={() => setShowResultModal(false)} />
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="中奖结果">
+          <div className="absolute inset-0 bg-pink-900/40 backdrop-blur-sm transition-opacity" onClick={() => setShowResultModal(false)} aria-hidden="true" />
 
           <div className="relative w-full max-w-sm bg-gradient-to-br from-pink-50 via-orange-50 to-amber-50 rounded-[2.5rem] shadow-[0_20px_60px_rgba(251,146,60,0.3)] p-8 text-center animate-scale-in overflow-hidden border-4 border-white/80">
             <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-orange-50 to-transparent -z-10"></div>
             <div className="absolute -top-10 -right-10 w-40 h-40 bg-pink-200 rounded-full blur-3xl opacity-40"></div>
             <div className="absolute -top-10 -left-10 w-40 h-40 bg-amber-200 rounded-full blur-3xl opacity-40"></div>
 
-            <button onClick={() => setShowResultModal(false)} className="absolute top-4 right-4 p-2 bg-stone-50 rounded-full hover:bg-stone-100 transition-colors z-20">
+            <button onClick={() => setShowResultModal(false)} className="absolute top-4 right-4 p-2 bg-stone-50 rounded-full hover:bg-stone-100 transition-colors z-20" aria-label="关闭">
               <svg className="w-4 h-4 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>

@@ -4,7 +4,7 @@ import { maskUserId, maskUsername } from "./logging";
 let _newApiUrl: string | null = null;
 
 const USER_QUOTA_LOCK_PREFIX = "newapi:quota:credit:lock:";
-const USER_QUOTA_LOCK_TTL_SECONDS = 15;
+const USER_QUOTA_LOCK_TTL_SECONDS = 30;
 const USER_QUOTA_LOCK_RETRY_MS = 120;
 const USER_QUOTA_LOCK_MAX_RETRIES = 25;
 const ADMIN_SESSION_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -184,7 +184,7 @@ export async function loginToNewApi(
     if (!cookies) {
       const raw = response.headers.get("set-cookie") || "";
       if (raw) {
-        cookies = extractCookieValues(raw.split(",").map((s) => s.trim()));
+        cookies = extractCookieValues([raw.split(";")[0].trim()].filter(Boolean));
       }
     }
 
@@ -504,15 +504,12 @@ export async function creditQuotaToUser(
         const newQuota = currentQuota + quotaToAdd;
         expectedQuota = newQuota;
 
-        const updatePayload = { ...user, id: userId, quota: newQuota };
-        const sanitizedUpdatePayload = Object.fromEntries(
-          Object.entries(updatePayload).filter(([, value]) => value !== undefined)
-        );
+        const updatePayload = { id: userId, quota: newQuota };
 
         const updateResponse = await fetch(`${baseUrl}/api/user/`, {
           method: "PUT",
           headers: buildAdminHeaders(loginResult, { "Content-Type": "application/json" }),
-          body: JSON.stringify(sanitizedUpdatePayload),
+          body: JSON.stringify(updatePayload),
         });
         const updateData = await parseJsonSafe<NewApiResponse<unknown>>(updateResponse);
 

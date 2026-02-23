@@ -1,5 +1,6 @@
 import { kv } from "./redis";
 import { getChinaDayStartTimestamp, getTodayDateString, getSecondsUntilMidnight } from "./time";
+import { randomInt } from "crypto";
 
 export interface LotteryTier {
   id: string;
@@ -69,7 +70,9 @@ const LOTTERY_CONFIG_MAX_DAILY_LIMIT = 1_000_000;
 const LOTTERY_CONFIG_MAX_TIER_VALUE = 100_000;
 
 const LOTTERY_PENDING_RECORDS_KEY = "lottery:pending_records";
+const LOTTERY_PENDING_MANUAL_REVIEW_KEY = "lottery:pending_manual_review";
 const PENDING_RECORDS_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 超过 24h 的 pending 视为过期
+const PENDING_RECORDS_MAX_RETRY = 3;
 
 export interface PendingLotteryRecord {
   record: LotteryRecord;
@@ -77,6 +80,7 @@ export interface PendingLotteryRecord {
   expectedQuota: number | null;
   reservationDay: string;
   storedAt: number;
+  retryCount?: number;
 }
 
 let totalRecordsInitPromise: Promise<void> | null = null;
@@ -228,44 +232,28 @@ async function ensureTotalUsersSetInitialized(): Promise<void> {
   await totalUsersInitPromise;
 }
 
-async function incrementTotalRecordsCounter(): Promise<void> {
-  await ensureTotalRecordsCounterInitialized();
-  await kv.incr(LOTTERY_RECORDS_TOTAL_KEY);
-}
-
 async function appendLotteryRecord(record: LotteryRecord, linuxdoId: number): Promise<void> {
   const userRecordsKey = `${LOTTERY_USER_RECORDS_PREFIX}${linuxdoId}`;
   const dayKey = getTodayRecordsDayKey();
+  const serialized = JSON.stringify(record);
 
   try {
-    await kv.lpush(LOTTERY_RECORDS_RECENT_KEY, record);
-    await kv.ltrim(LOTTERY_RECORDS_RECENT_KEY, 0, RECORDS_RECENT_MAX_LENGTH - 1);
+    await ensureTotalRecordsCounterInitialized();
   } catch {
     // ignore
   }
 
   try {
-    await kv.lpush(dayKey, record);
-    await kv.expire(dayKey, RECORDS_DAY_ARCHIVE_TTL_SECONDS);
-  } catch {
-    // ignore
-  }
-
-  try {
-    await kv.lpush(userRecordsKey, record);
-    await kv.ltrim(userRecordsKey, 0, USER_RECORDS_MAX_LENGTH - 1);
-  } catch {
-    // ignore
-  }
-
-  try {
-    await kv.sadd(LOTTERY_TOTAL_USERS_KEY, String(linuxdoId));
-  } catch {
-    // ignore
-  }
-
-  try {
-    await incrementTotalRecordsCounter();
+    const pipe = kv.pipeline();
+    pipe.lpush(LOTTERY_RECORDS_RECENT_KEY, serialized);
+    pipe.ltrim(LOTTERY_RECORDS_RECENT_KEY, 0, RECORDS_RECENT_MAX_LENGTH - 1);
+    pipe.lpush(dayKey, serialized);
+    pipe.expire(dayKey, RECORDS_DAY_ARCHIVE_TTL_SECONDS);
+    pipe.lpush(userRecordsKey, serialized);
+    pipe.ltrim(userRecordsKey, 0, USER_RECORDS_MAX_LENGTH - 1);
+    pipe.sadd(LOTTERY_TOTAL_USERS_KEY, String(linuxdoId));
+    pipe.incr(LOTTERY_RECORDS_TOTAL_KEY);
+    await pipe.exec();
   } catch {
     // ignore
   }
@@ -451,13 +439,23 @@ export async function rollbackDailyDirectQuota(dollars: number, today?: string):
   const key = `${LOTTERY_DAILY_DIRECT_KEY}${day}`;
   const cents = Math.round(dollars * DIRECT_AMOUNT_SCALE);
   if (cents <= 0) return;
-  await kv.decrby(key, cents);
+  const luaScript = `
+    local key = KEYS[1]
+    local cents = tonumber(ARGV[1])
+    local current = tonumber(redis.call('GET', key) or '0')
+    if current <= 0 then return 0 end
+    local decrement = math.min(cents, current)
+    return redis.call('DECRBY', key, decrement)
+  `;
+  await kv.eval(luaScript, [key], [cents]);
 }
 
 function weightedRandomSelect(tiers: LotteryTier[]): LotteryTier | null {
   const totalWeight = tiers.reduce((sum, tier) => sum + tier.probability, 0);
   if (totalWeight <= 0) return null;
-  let random = Math.random() * totalWeight;
+  // 使用加密安全随机数，精度放大到 1,000,000
+  const scale = 1_000_000;
+  let random = randomInt(Math.ceil(totalWeight * scale)) / scale;
   for (const tier of tiers) {
     random -= tier.probability;
     if (random <= 0) return tier;
@@ -709,9 +707,9 @@ export async function getPendingRecordCount(): Promise<number> {
 /**
  * 对账：验证所有 pending 记录的充值是否到账。
  * - 已确认到账：从 pending 列表移除
- * - 确认失败：回滚日额度和每日免费次数，从 pending 列表移除
+ * - 确认失败：增加 retryCount，超过 3 次移入人工审核队列
  * - 仍不确定或查询失败：保留在 pending 列表
- * - 超过 24 小时：视为过期移除（避免无限堆积）
+ * - 超过 24 小时：移入人工审核队列（避免无限堆积）
  */
 export async function reconcilePendingRecords(): Promise<{
   processed: number;
@@ -739,10 +737,15 @@ export async function reconcilePendingRecords(): Promise<{
       continue;
     }
 
-    // 超过 24h 视为过期
+    // 超过 24h 移入人工审核队列
     if (now - (pending.storedAt || 0) > PENDING_RECORDS_MAX_AGE_MS) {
       expired++;
-      console.warn("[reconcile] 过期 pending 记录:", pending.record.id);
+      console.warn("[reconcile] 过期 pending 记录，移入人工审核:", pending.record.id);
+      try {
+        await kv.lpush(LOTTERY_PENDING_MANUAL_REVIEW_KEY, pending);
+      } catch {
+        // ignore
+      }
       continue;
     }
 
@@ -755,7 +758,7 @@ export async function reconcilePendingRecords(): Promise<{
 
       const expectedQuota = Number(pending.expectedQuota);
       if (!Number.isFinite(expectedQuota) || expectedQuota <= 0) {
-        // 目标额度未知时不做“已到账/未到账”判定，避免误判
+        // 目标额度未知时不做"已到账/未到账"判定，避免误判
         remaining.push(pending);
         continue;
       }
@@ -764,17 +767,17 @@ export async function reconcilePendingRecords(): Promise<{
         confirmed++;
         console.log("[reconcile] 已确认到账:", pending.record.id);
       } else {
-        failed++;
-        console.log("[reconcile] 确认未到账，回滚:", pending.record.id);
-        try {
-          await rollbackDailyDirectQuota(pending.record.tierValue, pending.reservationDay);
-        } catch {
-          // ignore
-        }
-        try {
-          await releaseDailyFree(Number(pending.record.linuxdoId), pending.reservationDay);
-        } catch {
-          // ignore
+        const retryCount = (pending.retryCount || 0) + 1;
+        if (retryCount >= PENDING_RECORDS_MAX_RETRY) {
+          failed++;
+          console.warn("[reconcile] 超过最大重试次数，移入人工审核:", pending.record.id);
+          try {
+            await kv.lpush(LOTTERY_PENDING_MANUAL_REVIEW_KEY, { ...pending, retryCount });
+          } catch {
+            // ignore
+          }
+        } else {
+          remaining.push({ ...pending, retryCount });
         }
       }
     } catch {
@@ -782,14 +785,9 @@ export async function reconcilePendingRecords(): Promise<{
     }
   }
 
-  // 用未解决的记录替换原列表
+  // 用未解决的记录原子替换原列表
   try {
-    await kv.del(LOTTERY_PENDING_RECORDS_KEY);
-    if (remaining.length > 0) {
-      for (const item of remaining) {
-        await kv.lpush(LOTTERY_PENDING_RECORDS_KEY, item);
-      }
-    }
+    await kv.replaceList(LOTTERY_PENDING_RECORDS_KEY, remaining);
   } catch {
     // ignore
   }

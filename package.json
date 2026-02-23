@@ -11,9 +11,6 @@
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",
-    "@types/node": "^22.15.0",
-    "@types/react": "^19.1.0",
-    "@types/react-dom": "^19.1.0",
     "canvas-confetti": "^1.9.4",
     "ioredis": "^5.6.1",
     "lucide-react": "^0.462.0",
@@ -22,12 +19,15 @@
     "postcss": "^8.5.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "tailwindcss": "^4.1.18",
-    "typescript": "^5.8.0"
+    "tailwindcss": "^4.1.18"
   },
   "devDependencies": {
     "@types/canvas-confetti": "^1.9.0",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
     "eslint": "^9.25.0",
-    "eslint-config-next": "^16.1.0"
+    "eslint-config-next": "^16.1.0",
+    "typescript": "^5.8.0"
   }
 }

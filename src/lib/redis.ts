@@ -24,6 +24,10 @@ function getRedisInstance(): Redis {
     console.error("Redis connection error:", err.message);
   });
 
+  redis.on("end", () => {
+    redis = null;
+  });
+
   return redis;
 }
 
@@ -211,5 +215,34 @@ export const kv = {
   async expire(key: string, seconds: number): Promise<number> {
     const r = getRedisInstance();
     return r.expire(key, seconds);
+  },
+
+  /** 返回 ioredis 原生 pipeline，用于批量执行多个命令 */
+  pipeline() {
+    const r = getRedisInstance();
+    return r.pipeline();
+  },
+
+  /**
+   * 原子替换列表：DEL + RPUSH（Lua 脚本）
+   * 用于对账等场景，避免 DEL 与 RPUSH 之间的窗口期丢数据
+   */
+  async replaceList(key: string, items: unknown[]): Promise<void> {
+    const r = getRedisInstance();
+    if (items.length === 0) {
+      await r.del(key);
+      return;
+    }
+    const serialized = items.map((v) =>
+      typeof v === "string" ? v : JSON.stringify(v)
+    );
+    const luaScript = `
+      redis.call('DEL', KEYS[1])
+      for i = 1, #ARGV do
+        redis.call('RPUSH', KEYS[1], ARGV[i])
+      end
+      return #ARGV
+    `;
+    await r.eval(luaScript, 1, key, ...serialized);
   },
 };
