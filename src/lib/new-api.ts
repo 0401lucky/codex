@@ -158,6 +158,62 @@ function readAnyField(source: unknown, keys: string[]): unknown {
   return undefined;
 }
 
+function readNonEmptyStringField(source: unknown, keys: string[]): string | null {
+  const value = readAnyField(source, keys);
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function readFiniteNumberField(source: unknown, keys: string[]): number | null {
+  const value = readAnyField(source, keys);
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return numeric;
+}
+
+function buildQuotaUpdatePayload(
+  user: NewApiUser,
+  userId: number,
+  newQuota: number
+): Record<string, unknown> | null {
+  const username = readNonEmptyStringField(user, ["username", "user_name", "name"]);
+  if (!username) return null;
+
+  const payload: Record<string, unknown> = {
+    id: userId,
+    username,
+    quota: newQuota,
+  };
+
+  const displayName = readNonEmptyStringField(user, ["display_name", "displayName"]);
+  if (displayName) payload.display_name = displayName;
+
+  const role = readFiniteNumberField(user, ["role"]);
+  if (role !== null) payload.role = role;
+
+  const status = readFiniteNumberField(user, ["status"]);
+  if (status !== null) payload.status = status;
+
+  const email = readNonEmptyStringField(user, ["email"]);
+  if (email) payload.email = email;
+
+  const group = readNonEmptyStringField(user, ["group"]);
+  if (group) payload.group = group;
+
+  const linuxdoLevel = readFiniteNumberField(user, ["linuxdo_level", "linuxdoLevel"]);
+  if (linuxdoLevel !== null) payload.linuxdo_level = linuxdoLevel;
+
+  const linuxdoId = readAnyField(user, ["linux_do_id", "linuxdo_id", "linuxdoId"]);
+  if (typeof linuxdoId === "string" && linuxdoId.trim()) {
+    payload.linux_do_id = linuxdoId.trim();
+  } else if (typeof linuxdoId === "number" && Number.isFinite(linuxdoId)) {
+    payload.linux_do_id = Math.trunc(linuxdoId);
+  }
+
+  return payload;
+}
+
 function readUserLinuxDoId(user: NewApiUser): string {
   return normalizeLinuxDoId(readAnyField(user, ["linuxdo_id", "linuxdoId", "LinuxDoId"]));
 }
@@ -555,7 +611,10 @@ export async function creditQuotaToUser(
         const newQuota = currentQuota + quotaToAdd;
         expectedQuota = newQuota;
 
-        const updatePayload = { id: userId, quota: newQuota };
+        const updatePayload = buildQuotaUpdatePayload(user, userId, newQuota);
+        if (!updatePayload) {
+          return { success: false, message: "更新额度失败：用户缺少有效用户名" };
+        }
 
         const updateResponse = await fetch(`${baseUrl}/api/user/`, {
           method: "PUT",
@@ -572,6 +631,12 @@ export async function creditQuotaToUser(
         if (updateData?.success) {
           return { success: true, message: `成功充值 $${dollars}`, newQuota };
         }
+
+        console.warn("额度更新返回失败，准备执行二次校验", {
+          userId: maskUserId(userId),
+          status: updateResponse.status,
+          message: updateData?.message,
+        });
 
         const verifyResult = await verifyQuotaUpdate(userId, newQuota, adminCookies, adminUserId);
         if (verifyResult.success || verifyResult.uncertain) return verifyResult;
