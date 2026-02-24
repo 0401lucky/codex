@@ -559,9 +559,14 @@ export async function spinLotteryDirect(
     }
 
     if (!creditResult.success) {
+      console.warn("直充失败，准备回滚:", {
+        linuxdoId,
+        newApiUserId,
+        message: creditResult.message,
+      });
       await rollbackDailyDirectQuota(reservedDollars, today);
       await rollbackSpinCount();
-      return { success: false, message: "充值失败，请稍后重试" };
+      return { success: false, message: creditResult.message || "充值失败，请稍后重试" };
     }
 
     const record: LotteryRecord = {

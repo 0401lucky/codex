@@ -31,6 +31,12 @@ export async function POST() {
       });
     }
 
+    console.warn("[api/lottery/spin] failed:", {
+      linuxdoId: user.linuxdoId,
+      message: result.message,
+      uncertain: !!result.uncertain,
+    });
+
     return NextResponse.json({
       success: false,
       message: result.message,

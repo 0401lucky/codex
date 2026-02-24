@@ -42,6 +42,43 @@ function extractCookieValues(setCookieHeaders: string[]): string {
     .join("; ");
 }
 
+/**
+ * 某些运行时下 `headers.get("set-cookie")` 会把多个 Set-Cookie 合并成单个字符串，
+ * 这里按逗号分割时要跳过 Expires=Tue, ... GMT 中的逗号，避免把 cookie 截断。
+ */
+function splitCombinedSetCookieHeader(rawHeader: string): string[] {
+  const cookies: string[] = [];
+  let current = "";
+  let inExpires = false;
+  let marker = "";
+
+  for (const char of rawHeader) {
+    const lowerChar = char.toLowerCase();
+    marker = (marker + lowerChar).slice(-8);
+    if (!inExpires && marker === "expires=") {
+      inExpires = true;
+    }
+
+    if (char === "," && !inExpires) {
+      const cookie = current.trim();
+      if (cookie) cookies.push(cookie);
+      current = "";
+      marker = "";
+      continue;
+    }
+
+    current += char;
+
+    if (inExpires && char === ";") {
+      inExpires = false;
+    }
+  }
+
+  const tail = current.trim();
+  if (tail) cookies.push(tail);
+  return cookies;
+}
+
 async function acquireUserQuotaLock(userId: number): Promise<UserQuotaLock | null> {
   const key = `${USER_QUOTA_LOCK_PREFIX}${userId}`;
   const token = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -182,9 +219,19 @@ export async function loginToNewApi(
       cookies = extractCookieValues(setCookieHeaders);
     }
     if (!cookies) {
+      const rawHeadersFn = (response.headers as Headers & {
+        raw?: () => Record<string, string[]>;
+      }).raw;
+      const rawHeaders = typeof rawHeadersFn === "function" ? rawHeadersFn.call(response.headers) : undefined;
+      const rawSetCookies = rawHeaders?.["set-cookie"];
+      if (rawSetCookies && rawSetCookies.length > 0) {
+        cookies = extractCookieValues(rawSetCookies);
+      }
+    }
+    if (!cookies) {
       const raw = response.headers.get("set-cookie") || "";
       if (raw) {
-        cookies = extractCookieValues([raw.split(";")[0].trim()].filter(Boolean));
+        cookies = extractCookieValues(splitCombinedSetCookieHeader(raw));
       }
     }
 
@@ -196,6 +243,10 @@ export async function loginToNewApi(
       hasData: !!data.data,
       userId: maskUserId(data.data?.id),
     });
+
+    if (data.success && !cookies) {
+      console.warn("Login success but no session cookies captured from response headers.");
+    }
 
     if (data.success) {
       return { success: true, message: "登录成功", cookies, user: data.data };
